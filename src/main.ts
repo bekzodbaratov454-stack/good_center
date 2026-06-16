@@ -1,9 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import dns from 'dns';
+import * as dns from 'dns';
 
-dns.setServers(['8.8.8.8', '1.1.1.1']);
 
+
+dns.setServers(['8.8.8.8', '1.1.1.1']); // setServers is on the main dns module
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
