@@ -75,7 +75,6 @@ export class BotService implements OnModuleInit {
       const user = await this.usersService.findOrCreate(tgUser);
       const lang = user.language as Lang;
 
-      // Deep link: /start prod_<id>
       const payload = (ctx as any).startPayload as string;
       if (payload?.startsWith('prod_')) {
         const prodId = payload.replace('prod_', '');
@@ -98,16 +97,20 @@ export class BotService implements OnModuleInit {
           const keyboard = productDetailKeyboard(product, lang, isFav);
 
           if (product.photos?.length) {
+            const maxLen = 900;
+            const shortText = text.length > maxLen ? text.substring(0, maxLen) + '...' : text;
             await ctx.replyWithPhoto(product.photos[0], {
-              caption: text,
+              caption: shortText,
               parse_mode: 'Markdown',
               ...keyboard,
             });
+            if (text.length > maxLen) {
+              await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+            }
           } else {
             await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
           }
 
-          // Asosiy menyu ham ko'rsatamiz
           if (!this.isAdmin(tgUser.id)) {
             await ctx.reply(t(lang, 'backToMenu'), mainMenuKeyboard(lang));
           }
@@ -115,7 +118,6 @@ export class BotService implements OnModuleInit {
         }
       }
 
-      // Oddiy /start
       if (this.isAdmin(tgUser.id)) {
         await ctx.reply('👑 Admin paneliga xush kelibsiz!', adminMainKeyboard());
       } else {
@@ -123,13 +125,11 @@ export class BotService implements OnModuleInit {
       }
     });
 
-    // Til tanlash
     this.bot.hears('🌐 Til / Язык / Language', async (ctx) => {
       const lang = await this.getUserLang(ctx);
       await ctx.reply(t(lang, 'selectLanguage'), languageKeyboard());
     });
 
-    // Bosh menyu
     this.bot.hears(['🏠 Bosh menyu', '🏠 Главное меню', '🏠 Main Menu'], async (ctx) => {
       const lang = await this.getUserLang(ctx);
       await this.usersService.setState(ctx.from.id, 'idle');
@@ -149,7 +149,6 @@ export class BotService implements OnModuleInit {
       const categories = await this.categoriesService.getAll();
       if (!categories.length) return ctx.reply(t(lang, 'noCategories'));
 
-      // Har bir kategoriya uchun mahsulot sonini olish
       const countEntries = await Promise.all(
         categories.map(async (cat) => {
           const count = await this.productsService.getCountByCategory(cat._id.toString());
@@ -157,7 +156,6 @@ export class BotService implements OnModuleInit {
         }),
       );
       const counts = Object.fromEntries(countEntries);
-
       await ctx.reply(t(lang, 'selectCategory'), categoriesInlineKeyboard(categories, lang, counts));
     });
 
@@ -189,7 +187,6 @@ export class BotService implements OnModuleInit {
       await ctx.reply(t(lang, 'askAdminPrompt'), cancelKeyboard(lang));
     });
 
-    // User: Aloqa ma'lumotlari (Tel & Manzil) — eski birlashtrilgan tugma
     this.bot.hears(
       ['📞 Aloqa & 📍 Manzil', '📞 Контакт & 📍 Адрес', '📞 Contact & 📍 Location'],
       async (ctx) => {
@@ -198,13 +195,11 @@ export class BotService implements OnModuleInit {
       },
     );
 
-    // User: alohida Telefon tugmasi
     this.bot.hears(['📞 Telefon', '📞 Телефон', '📞 Phone'], async (ctx) => {
       if (this.isAdmin(ctx.from.id)) return;
       await this.sendContactInfo(ctx);
     });
 
-    // User: alohida Manzil tugmasi
     this.bot.hears(['📍 Manzil', '📍 Адрес', '📍 Location'], async (ctx) => {
       if (this.isAdmin(ctx.from.id)) return;
       const lang = await this.getUserLang(ctx);
@@ -212,21 +207,13 @@ export class BotService implements OnModuleInit {
       const contactLat = parseFloat(this.config.get('CONTACT_LAT') || '0');
       const contactLng = parseFloat(this.config.get('CONTACT_LNG') || '0');
 
-      if (!contactAddress && !contactLat) {
-        return ctx.reply(t(lang, 'noContactInfo'));
-      }
-
-      if (contactAddress) {
-        await ctx.reply(`📍 *${t(lang, 'address')}:* ${contactAddress}`, { parse_mode: 'Markdown' });
-      }
-      if (contactLat && contactLng) {
-        await ctx.replyWithLocation(contactLat, contactLng);
-      }
+      if (!contactAddress && !contactLat) return ctx.reply(t(lang, 'noContactInfo'));
+      if (contactAddress) await ctx.reply(`📍 *${t(lang, 'address')}:* ${contactAddress}`, { parse_mode: 'Markdown' });
+      if (contactLat && contactLng) await ctx.replyWithLocation(contactLat, contactLng);
     });
 
     // ============ CALLBACK QUERIES ============
 
-    // Kategoriya tanlash
     this.bot.action(/^cat_(.+)$/, async (ctx) => {
       const catId = ctx.match[1];
       const lang = await this.getUserLang(ctx);
@@ -250,7 +237,7 @@ export class BotService implements OnModuleInit {
       await ctx.answerCbQuery();
     });
 
-    // Mahsulot ko'rish
+    // ============ MAHSULOT KO'RISH (TUZATILGAN) ============
     this.bot.action(/^prod_(.+)$/, async (ctx) => {
       const prodId = ctx.match[1];
       const lang = await this.getUserLang(ctx);
@@ -275,33 +262,40 @@ export class BotService implements OnModuleInit {
       if (product.phoneNumber) text += `\n📞 *${t(lang, 'phone')}:* \`${product.phoneNumber}\``;
       if (product.locationName) text += `\n📍 *${t(lang, 'address')}:* ${product.locationName}`;
       text += `\n\n👁 ${t(lang, 'views')}: ${product.viewCount + 1}`;
+
       const keyboard = productDetailKeyboard(product, lang, isFav);
 
       try { await ctx.deleteMessage(); } catch {}
 
       if (product.photos?.length) {
         if (product.photos.length === 1) {
+          // Bir rasmli: caption 1024 dan oshsa qisqartir, to'liqini alohida yubor
+          const maxLen = 900;
+          const shortText = text.length > maxLen ? text.substring(0, maxLen) + '...' : text;
           await ctx.replyWithPhoto(product.photos[0], {
-            caption: text,
+            caption: shortText,
             parse_mode: 'Markdown',
             ...keyboard,
           });
+          if (text.length > maxLen) {
+            await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+          }
         } else {
-          const media = product.photos.map((ph, i) => ({
+          // Ko'p rasmli: captionsiz rasm, keyin to'liq matn alohida
+          const media = product.photos.map((ph) => ({
             type: 'photo' as const,
             media: ph,
-            ...(i === 0 ? { caption: text, parse_mode: 'Markdown' as const } : {}),
           }));
           await ctx.replyWithMediaGroup(media as any);
-          await ctx.reply('👇 Amallar:', keyboard);
+          await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
         }
       } else {
         await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
       }
+
       await ctx.answerCbQuery();
     });
 
-    // Telefon (alohida)
     this.bot.action(/^call_(.+)$/, async (ctx) => {
       const prodId = ctx.match[1];
       const product = await this.productsService.findById(prodId);
@@ -310,7 +304,6 @@ export class BotService implements OnModuleInit {
       await ctx.reply(`📞 *${product.name}*\n\n${t(await this.getUserLang(ctx), 'phone')}: \`${product.phoneNumber}\``, { parse_mode: 'Markdown' });
     });
 
-    // Lokatsiya (alohida)
     this.bot.action(/^loc_(.+)$/, async (ctx) => {
       const prodId = ctx.match[1];
       const product = await this.productsService.findById(prodId);
@@ -327,7 +320,6 @@ export class BotService implements OnModuleInit {
       if (product.locationName) await ctx.reply(`📍 ${product.locationName}`);
     });
 
-    // Tel & Manzil birga
     this.bot.action(/^contact_(.+)$/, async (ctx) => {
       const prodId = ctx.match[1];
       const product = await this.productsService.findById(prodId);
@@ -347,7 +339,6 @@ export class BotService implements OnModuleInit {
       }
     });
 
-    // Sevimli toggle
     this.bot.action(/^fav_(.+)$/, async (ctx) => {
       const prodId = ctx.match[1];
       const lang = await this.getUserLang(ctx);
@@ -355,7 +346,6 @@ export class BotService implements OnModuleInit {
       await ctx.answerCbQuery(added ? t(lang, 'addedFavorite') : t(lang, 'removedFavorite'));
     });
 
-    // Ulashish
     this.bot.action(/^share_(.+)$/, async (ctx) => {
       const prodId = ctx.match[1];
       await ctx.answerCbQuery();
@@ -363,7 +353,6 @@ export class BotService implements OnModuleInit {
       await ctx.reply(`📤 Ushbu mahsulotni ulashing:\nhttps://t.me/${botInfo.username}?start=prod_${prodId}`);
     });
 
-    // Til
     this.bot.action(/^lang_(uz|ru|en)$/, async (ctx) => {
       const lang = ctx.match[1] as Lang;
       await this.usersService.setLanguage(ctx.from.id, lang);
@@ -372,18 +361,15 @@ export class BotService implements OnModuleInit {
       await ctx.reply(t(lang, 'welcome', ctx.from.first_name), mainMenuKeyboard(lang));
     });
 
-    // Admin: userni savoliga javob berish
     this.bot.action(/^reply_(\d+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const targetUserId = parseInt(ctx.match[1]);
       await ctx.answerCbQuery();
-
       this.adminSessions.set(ctx.from.id, {
         action: 'reply_to_user',
         targetUserId,
         step: 'message',
       });
-
       await ctx.reply(
         `📨 *User #${targetUserId}* ga javob yozing:`,
         { parse_mode: 'Markdown', ...cancelKeyboard('uz') },
@@ -414,7 +400,6 @@ export class BotService implements OnModuleInit {
       });
     });
 
-    // Admin: kategoriyalar ro'yxati
     this.bot.hears('📋 Kategoriyalar', async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const categories = await this.categoriesService.getAllForAdmin();
@@ -436,7 +421,6 @@ export class BotService implements OnModuleInit {
       });
     });
 
-    // Admin: kategoriya menyu
     this.bot.action(/^admin_cat_menu_(.+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const catId = ctx.match[1];
@@ -449,7 +433,6 @@ export class BotService implements OnModuleInit {
       );
     });
 
-    // Admin: mahsulotlar ro'yxati
     this.bot.hears('📦 Mahsulotlar', async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const products = await this.productsService.getAllForAdmin();
@@ -473,7 +456,6 @@ export class BotService implements OnModuleInit {
       });
     });
 
-    // Admin: mahsulot menyu
     this.bot.action(/^admin_prod_menu_(.+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const prodId = ctx.match[1];
@@ -486,7 +468,6 @@ export class BotService implements OnModuleInit {
       );
     });
 
-    // Admin: mahsulot tahrirlash boshlash
     this.bot.action(/^admin_edit_prod_(.+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const prodId = ctx.match[1];
@@ -519,7 +500,6 @@ export class BotService implements OnModuleInit {
       );
     });
 
-    // Admin: kategoriya tahrirlash boshlash
     this.bot.action(/^admin_edit_cat_(.+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const catId = ctx.match[1];
@@ -539,7 +519,6 @@ export class BotService implements OnModuleInit {
       );
     });
 
-    // Admin: tahrirlash field tanlash
     this.bot.action(/^admin_edit_field_(name|desc|price|phone|locname|photos)_(.+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const field = ctx.match[1];
@@ -572,7 +551,6 @@ export class BotService implements OnModuleInit {
       }
     });
 
-    // Admin: tahrirlash rasmlar tayyor
     this.bot.action('admin_edit_photos_done', async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const session = this.adminSessions.get(ctx.from.id);
@@ -581,13 +559,11 @@ export class BotService implements OnModuleInit {
       await this.saveEditedProduct(ctx, session);
     });
 
-    // Admin: foydalanuvchilar ro'yxati
     this.bot.hears("👥 Foydalanuvchilar", async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       await this.sendUsersPage(ctx, 1);
     });
 
-    // Admin: foydalanuvchilar paginatsiya callback
     this.bot.action(/^users_page_(\d+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const page = parseInt(ctx.match[1]);
@@ -597,7 +573,6 @@ export class BotService implements OnModuleInit {
 
     this.bot.action('noop', async (ctx) => ctx.answerCbQuery());
 
-    // Statistika
     this.bot.hears('📊 Statistika', async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const [userCount, activeUsers, catCount, prodCount, topProducts] = await Promise.all([
@@ -619,7 +594,6 @@ export class BotService implements OnModuleInit {
       await ctx.reply(text, { parse_mode: 'Markdown' });
     });
 
-    // Broadcast
     this.bot.hears('📢 Xabar yuborish', async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       this.adminSessions.set(ctx.from.id, { action: 'broadcast', step: 'message' });
@@ -629,7 +603,6 @@ export class BotService implements OnModuleInit {
       );
     });
 
-    // Admin kategoriya tanlash (callback)
     this.bot.action(/^admin_choose_cat_(.+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const catId = ctx.match[1];
@@ -641,7 +614,6 @@ export class BotService implements OnModuleInit {
       await ctx.reply('📝 Mahsulot nomini kiriting:');
     });
 
-    // Admin: kategoriyadan mahsulot qo'shish
     this.bot.action(/^admin_add_prod_(.+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const catId = ctx.match[1];
@@ -654,7 +626,6 @@ export class BotService implements OnModuleInit {
       await ctx.reply("📝 Mahsulot nomini kiriting:");
     });
 
-    // O'chirish tasdiqlash
     this.bot.action(/^admin_del_cat_(.+)$/, async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const catId = ctx.match[1];
@@ -689,15 +660,12 @@ export class BotService implements OnModuleInit {
       await ctx.answerCbQuery();
     });
 
-    // Rasmlar tayyor (qo'shish)
     this.bot.action('admin_photos_done', async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       await ctx.answerCbQuery('✅ Rasmlar saqlandi!');
-
       if (session.action === 'add_product') {
-        // Rasmlar qabul qilindi, endi saqlash
         await this.saveProduct(ctx);
       }
     });
@@ -711,14 +679,11 @@ export class BotService implements OnModuleInit {
       await ctx.answerCbQuery('🗑 Rasmlar tozalandi');
       await ctx.reply('🗑 Barcha rasmlar o\'chirildi.\n\n📸 Qaytadan rasm yuboring:', {
         reply_markup: {
-          inline_keyboard: [
-            [{ text: "✅ Rasmsiz saqlash", callback_data: 'admin_photos_done' }],
-          ],
+          inline_keyboard: [[{ text: "✅ Rasmsiz saqlash", callback_data: 'admin_photos_done' }]],
         },
       });
     });
 
-    // Narxni o'tkazib yuborish -> foto bosqichiga o'tmasdan to'g'ridan saqlash
     this.bot.action('admin_skip_price', async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const session = this.adminSessions.get(ctx.from.id);
@@ -740,7 +705,6 @@ export class BotService implements OnModuleInit {
       }
     });
 
-    // Ko'p tillik skip actionlar
     this.bot.action('admin_skip_name_ru', async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const session = this.adminSessions.get(ctx.from.id);
@@ -790,7 +754,6 @@ export class BotService implements OnModuleInit {
       );
     });
 
-    // Telefon o'tkazib yuborish
     this.bot.action("admin_skip_phone_to_loc", async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const session = this.adminSessions.get(ctx.from.id);
@@ -802,7 +765,6 @@ export class BotService implements OnModuleInit {
       await this.askLocation(ctx);
     });
 
-    // Manzilni o'tkazib yuborish
     this.bot.action("admin_skip_location_all", async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const session = this.adminSessions.get(ctx.from.id);
@@ -817,7 +779,6 @@ export class BotService implements OnModuleInit {
       });
     });
 
-    // Koordinatani o'tkazib yuborish
     this.bot.action("admin_skip_coords", async (ctx) => {
       if (!this.isAdmin(ctx.from.id)) return;
       const session = this.adminSessions.get(ctx.from.id);
@@ -831,7 +792,6 @@ export class BotService implements OnModuleInit {
       });
     });
 
-    // Lokatsiya (Telegram location message)
     this.bot.on('location', async (ctx) => {
       const userId = ctx.from.id;
       if (!this.isAdmin(userId)) return;
@@ -851,18 +811,14 @@ export class BotService implements OnModuleInit {
       });
     });
 
-    // ============ RASM XABARLARI ============
-
     this.bot.on('photo', async (ctx) => {
       const userId = ctx.from.id;
       if (!this.isAdmin(userId)) return;
       const session = this.adminSessions.get(userId);
       if (!session) return;
 
-      // Yangi mahsulot yoki tahrirlash uchun rasm qabul qilish
       const isPhotosStep = session.step === 'photos';
       const isEditPhotos = session.action === 'edit_product' && session.step === 'photos';
-
       if (!isPhotosStep && !isEditPhotos) return;
 
       const photo = (ctx.message as any).photo;
@@ -886,13 +842,10 @@ export class BotService implements OnModuleInit {
       });
     });
 
-    // ============ MATN XABARLARI ============
-
     this.bot.on('text', async (ctx) => {
       const userId = ctx.from.id;
       const text = ctx.message.text;
 
-      // Bekor qilish
       if (text === '❌ Bekor qilish' || text === '❌ Отмена' || text === '❌ Cancel') {
         await this.usersService.setState(userId, 'idle');
         this.adminSessions.delete(userId);
@@ -901,14 +854,12 @@ export class BotService implements OnModuleInit {
         return ctx.reply('❌ Bekor qilindi', mainMenuKeyboard(lang));
       }
 
-      // Admin sessiyalari
       if (this.isAdmin(userId)) {
         const session = this.adminSessions.get(userId);
         if (session) return this.handleAdminSession(ctx, session, text);
         return;
       }
 
-      // User holati
       const user = await this.usersService.findByTelegramId(userId);
       if (!user) return;
       await this.usersService.incrementMessage(userId);
@@ -920,7 +871,6 @@ export class BotService implements OnModuleInit {
 
   // ============ HELPER METHODS ============
 
-  // Foydalanuvchilar ro'yxatini paginatsiya bilan yuborish
   private async sendUsersPage(ctx: Context, page: number, edit = false) {
     const limit = 10;
     const { users, total } = await this.usersService.getUsersPaginated(page, limit);
@@ -952,7 +902,6 @@ export class BotService implements OnModuleInit {
     }
   }
 
-  // Aloqa ma'lumotlarini yuborish
   private async sendContactInfo(ctx: Context) {
     const lang = await this.getUserLang(ctx);
     const contactPhone = this.config.get('CONTACT_PHONE') || '';
@@ -966,10 +915,7 @@ export class BotService implements OnModuleInit {
     if (!contactPhone && !contactAddress) text += t(lang, 'noContactInfo');
 
     await ctx.reply(text, { parse_mode: 'Markdown' });
-
-    if (contactLat && contactLng) {
-      await ctx.replyWithLocation(contactLat, contactLng);
-    }
+    if (contactLat && contactLng) await ctx.replyWithLocation(contactLat, contactLng);
   }
 
   private async handleSearch(ctx: Context, query: string, lang: Lang) {
@@ -1010,7 +956,6 @@ export class BotService implements OnModuleInit {
   private async handleAdminSession(ctx: Context, session: any, text: string) {
     const userId = ctx.from.id;
 
-    // ---- KATEGORIYA QO'SHISH ----
     if (session.action === 'add_category') {
       if (session.step === 'name') {
         const emojiMatch = text.match(/(\p{Emoji})/u);
@@ -1026,7 +971,6 @@ export class BotService implements OnModuleInit {
       return;
     }
 
-    // ---- KATEGORIYA TAHRIRLASH ----
     if (session.action === 'edit_category') {
       if (session.step === 'name') {
         const emojiMatch = text.match(/(\p{Emoji})/u);
@@ -1042,135 +986,92 @@ export class BotService implements OnModuleInit {
       return;
     }
 
-    // ---- MAHSULOT QO'SHISH ----
     if (session.action === 'add_product') {
       if (session.step === 'name') {
-        session.name = text;
-        session.step = 'name_ru';
+        session.name = text; session.step = 'name_ru';
         this.adminSessions.set(userId, session);
-        await ctx.reply(
-          '🇷🇺 Rus tilidagi nomini kiriting (ixtiyoriy):',
-          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_name_ru' }]] } },
-        );
+        await ctx.reply('🇷🇺 Rus tilidagi nomini kiriting (ixtiyoriy):',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_name_ru' }]] } });
         return;
       }
       if (session.step === 'name_ru') {
-        session.nameRu = text;
-        session.step = 'name_en';
+        session.nameRu = text; session.step = 'name_en';
         this.adminSessions.set(userId, session);
-        await ctx.reply(
-          '🇬🇧 Ingliz tilidagi nomini kiriting (ixtiyoriy):',
-          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_name_en' }]] } },
-        );
+        await ctx.reply('🇬🇧 Ingliz tilidagi nomini kiriting (ixtiyoriy):',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_name_en' }]] } });
         return;
       }
       if (session.step === 'name_en') {
-        session.nameEn = text;
-        session.step = 'description';
+        session.nameEn = text; session.step = 'description';
         this.adminSessions.set(userId, session);
         await ctx.reply('📝 O\'zbek tilidagi tavsifini kiriting:');
         return;
       }
       if (session.step === 'description') {
-        session.description = text;
-        session.step = 'description_ru';
+        session.description = text; session.step = 'description_ru';
         this.adminSessions.set(userId, session);
-        await ctx.reply(
-          '🇷🇺 Rus tilidagi tavsifini kiriting (ixtiyoriy):',
-          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_desc_ru' }]] } },
-        );
+        await ctx.reply('🇷🇺 Rus tilidagi tavsifini kiriting (ixtiyoriy):',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_desc_ru' }]] } });
         return;
       }
       if (session.step === 'description_ru') {
-        session.descriptionRu = text;
-        session.step = 'description_en';
+        session.descriptionRu = text; session.step = 'description_en';
         this.adminSessions.set(userId, session);
-        await ctx.reply(
-          '🇬🇧 Ingliz tilidagi tavsifini kiriting (ixtiyoriy):',
-          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_desc_en' }]] } },
-        );
+        await ctx.reply('🇬🇧 Ingliz tilidagi tavsifini kiriting (ixtiyoriy):',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_desc_en' }]] } });
         return;
       }
       if (session.step === 'description_en') {
-        session.descriptionEn = text;
-        session.step = 'phone';
+        session.descriptionEn = text; session.step = 'phone';
         this.adminSessions.set(userId, session);
-        await ctx.reply(
-          '📞 Telefon raqamini kiriting (ixtiyoriy):\n\nNamuna: +998901234567',
-          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_phone_to_loc' }]] } },
-        );
+        await ctx.reply('📞 Telefon raqamini kiriting (ixtiyoriy):\n\nNamuna: +998901234567',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_phone_to_loc' }]] } });
         return;
       }
       if (session.step === 'phone') {
-        session.phone = text;
-        session.step = 'location_name';
+        session.phone = text; session.step = 'location_name';
         this.adminSessions.set(userId, session);
         await this.askLocation(ctx);
         return;
       }
       if (session.step === 'location_name') {
-        session.locationName = text;
-        session.step = 'location_coords';
+        session.locationName = text; session.step = 'location_coords';
         this.adminSessions.set(userId, session);
-        await ctx.reply(
-          '📌 Telegram lokatsiya tugmasi orqali aniq joylashuvni yuboring yoki o\'tkazib yuboring:',
-          {
-            reply_markup: {
-              inline_keyboard: [[{ text: "⏭ Koordinatasiz saqlash", callback_data: 'admin_skip_coords' }]],
-            },
-          },
-        );
+        await ctx.reply('📌 Telegram lokatsiya tugmasi orqali aniq joylashuvni yuboring yoki o\'tkazib yuboring:',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ Koordinatasiz saqlash", callback_data: 'admin_skip_coords' }]] } });
         return;
       }
       if (session.step === 'location_coords') {
-        // Matn keldi — koordinatasiz davom etish
-        session.location = null;
-        session.step = 'price';
+        session.location = null; session.step = 'price';
         this.adminSessions.set(userId, session);
-        await ctx.reply('💰 Narxini kiriting (ixtiyoriy):', {
-          reply_markup: {
-            inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_price' }]],
-          },
-        });
+        await ctx.reply('💰 Narxini kiriting (ixtiyoriy):',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ O'tkazib yuborish", callback_data: 'admin_skip_price' }]] } });
         return;
       }
       if (session.step === 'price') {
-        session.price = text;
-        session.step = 'photos';
+        session.price = text; session.step = 'photos';
         this.adminSessions.set(userId, session);
-        await ctx.reply('📸 Mahsulot rasmini yuboring (bir nechta bo\'lishi mumkin):', {
-          reply_markup: {
-            inline_keyboard: [[{ text: "⏭ Rasmsiz saqlash", callback_data: 'admin_photos_done' }]],
-          },
-        });
+        await ctx.reply('📸 Mahsulot rasmini yuboring (bir nechta bo\'lishi mumkin):',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ Rasmsiz saqlash", callback_data: 'admin_photos_done' }]] } });
         return;
       }
       if (session.step === 'photos') {
-        await ctx.reply('📸 Iltimos rasm yuboring yoki saqlashni tasdiqlang:', {
-          reply_markup: {
-            inline_keyboard: [[{ text: "⏭ Rasmsiz saqlash", callback_data: 'admin_photos_done' }]],
-          },
-        });
+        await ctx.reply('📸 Iltimos rasm yuboring yoki saqlashni tasdiqlang:',
+          { reply_markup: { inline_keyboard: [[{ text: "⏭ Rasmsiz saqlash", callback_data: 'admin_photos_done' }]] } });
         return;
       }
     }
 
-    // ---- MAHSULOT TAHRIRLASH ----
     if (session.action === 'edit_product') {
       const updateData: any = {};
-
       if (session.step === 'name') updateData.name = text;
       else if (session.step === 'desc') updateData.description = text;
       else if (session.step === 'price') updateData.price = text;
       else if (session.step === 'phone') updateData.phoneNumber = text;
       else if (session.step === 'locname') updateData.locationName = text;
       else if (session.step === 'photos') {
-        // Rasm matn keldi, xabar bering
-        await ctx.reply('📸 Iltimos rasm yuboring yoki saqlashni tasdiqlang:', {
-          reply_markup: {
-            inline_keyboard: [[{ text: "✅ Saqlash", callback_data: 'admin_edit_photos_done' }]],
-          },
-        });
+        await ctx.reply('📸 Iltimos rasm yuboring yoki saqlashni tasdiqlang:',
+          { reply_markup: { inline_keyboard: [[{ text: "✅ Saqlash", callback_data: 'admin_edit_photos_done' }]] } });
         return;
       }
 
@@ -1186,16 +1087,11 @@ export class BotService implements OnModuleInit {
       return;
     }
 
-    // ---- USER GA JAVOB BERISH ----
     if (session.action === 'reply_to_user' && session.step === 'message') {
       const targetUserId = session.targetUserId;
       this.adminSessions.delete(userId);
       try {
-        await this.bot.telegram.sendMessage(
-          targetUserId,
-          `📨 *Admin javob berdi:*\n\n${text}`,
-          { parse_mode: 'Markdown' },
-        );
+        await this.bot.telegram.sendMessage(targetUserId, `📨 *Admin javob berdi:*\n\n${text}`, { parse_mode: 'Markdown' });
         await ctx.reply('✅ Javob yuborildi!', adminMainKeyboard());
       } catch {
         await ctx.reply('❌ Foydalanuvchiga xabar yuborib bo\'lmadi (bot bloklangandir).', adminMainKeyboard());
@@ -1203,7 +1099,6 @@ export class BotService implements OnModuleInit {
       return;
     }
 
-    // ---- BROADCAST ----
     if (session.action === 'broadcast' && session.step === 'message') {
       this.adminSessions.delete(userId);
       const users = await this.usersService.getAllUsers();
@@ -1216,25 +1111,17 @@ export class BotService implements OnModuleInit {
           await new Promise((r) => setTimeout(r, 35));
         } catch { failed++; }
       }
-      await ctx.reply(
-        `✅ Tayyor!\n✔️ Yuborildi: ${sent}\n❌ Xato: ${failed}`,
-        adminMainKeyboard(),
-      );
+      await ctx.reply(`✅ Tayyor!\n✔️ Yuborildi: ${sent}\n❌ Xato: ${failed}`, adminMainKeyboard());
     }
   }
 
   private async askLocation(ctx: Context) {
     await ctx.reply(
       '📍 Manzil nomini kiriting (masalan: Toshkent, Chilonzor 5-uy)',
-      {
-        reply_markup: {
-          inline_keyboard: [[{ text: "⏭ Manzilsiz o'tkazib yuborish", callback_data: 'admin_skip_location_all' }]],
-        },
-      },
+      { reply_markup: { inline_keyboard: [[{ text: "⏭ Manzilsiz o'tkazib yuborish", callback_data: 'admin_skip_location_all' }]] } },
     );
   }
 
-  // Yangi mahsulotni saqlash
   private async saveProduct(ctx: Context) {
     const userId = ctx.from.id;
     const session = this.adminSessions.get(userId);
@@ -1265,7 +1152,6 @@ export class BotService implements OnModuleInit {
 
       await ctx.reply(text, { parse_mode: 'Markdown', ...adminMainKeyboard() });
 
-      // Foydalanuvchilarga xabarnoma
       const users = await this.usersService.getAllUsers();
       let notifSent = 0;
       for (const user of users) {
@@ -1275,18 +1161,14 @@ export class BotService implements OnModuleInit {
             `🆕 Yangi mahsulot: *${product.name}*`,
             {
               parse_mode: 'Markdown',
-              reply_markup: {
-                inline_keyboard: [[{ text: "👁 Ko'rish", callback_data: `prod_${product._id}` }]],
-              },
+              reply_markup: { inline_keyboard: [[{ text: "👁 Ko'rish", callback_data: `prod_${product._id}` }]] },
             },
           );
           notifSent++;
           await new Promise((r) => setTimeout(r, 35));
         } catch {}
       }
-      if (notifSent > 0) {
-        await ctx.reply(`📢 ${notifSent} ta foydalanuvchiga xabarnoma yuborildi!`);
-      }
+      if (notifSent > 0) await ctx.reply(`📢 ${notifSent} ta foydalanuvchiga xabarnoma yuborildi!`);
     } catch (err) {
       this.logger.error('Mahsulot saqlashda xato:', err);
       await ctx.reply('❌ Mahsulot saqlashda xato yuz berdi. Qaytadan urinib ko\'ring.', adminMainKeyboard());
@@ -1294,7 +1176,6 @@ export class BotService implements OnModuleInit {
     }
   }
 
-  // Tahrirlangan mahsulotni saqlash (rasmlar)
   private async saveEditedProduct(ctx: Context, session: any) {
     const userId = ctx.from.id;
     try {
