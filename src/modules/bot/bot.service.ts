@@ -872,29 +872,32 @@ export class BotService implements OnModuleInit {
 
   // ============ HELPER METHODS ============
 
+  private escapeMd(text: string): string {
+    return (text || '').replace(/[*_`[\]()]/g, '');
+  }
+
   private async sendUsersPage(ctx: Context, page: number, edit = false) {
     try {
       const limit = 10;
       const { users, total } = await this.usersService.getUsersPaginated(page, limit);
       const totalPages = Math.max(1, Math.ceil(total / limit));
 
-      // Sahifa chegarasini tekshirish
       if (page < 1) page = 1;
       if (page > totalPages) page = totalPages;
 
-      let text = `👥 *Foydalanuvchilar ro'yxati* (${total} ta)\n`;
+      let text = `👥 Foydalanuvchilar ro'yxati (${total} ta)\n`;
       text += `📄 Sahifa: ${page}/${totalPages}\n\n`;
 
       if (users.length === 0) {
-        text += `_Foydalanuvchilar topilmadi._`;
+        text += `Foydalanuvchilar topilmadi.`;
       } else {
         users.forEach((u, i) => {
           const num = (page - 1) * limit + i + 1;
-          const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || 'Nomsiz';
-          const username = u.username ? ` @${u.username}` : '';
-          const lang = u.language?.toUpperCase() || 'UZ';
+          const name = this.escapeMd([u.firstName, u.lastName].filter(Boolean).join(' ') || 'Nomsiz');
+          const username = u.username ? ` @${this.escapeMd(u.username)}` : '';
+          const lang = (u.language || 'uz').toUpperCase();
           const blocked = u.isBlocked ? ' 🚫' : '';
-          text += `${num}. *${name}*${username}\n`;
+          text += `${num}. ${name}${username}\n`;
           text += `   🌐 ${lang} | 💬 ${u.messageCount || 0} xabar${blocked}\n\n`;
         });
       }
@@ -903,19 +906,18 @@ export class BotService implements OnModuleInit {
 
       if (edit) {
         try {
-          await (ctx as any).editMessageText(text, { parse_mode: 'Markdown', ...keyboard });
+          await (ctx as any).editMessageText(text, keyboard);
         } catch (editErr: any) {
-          // "message is not modified" xatosini e'tiborsiz qoldirish
           if (!editErr?.description?.includes('message is not modified')) {
-            await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+            await ctx.reply(text, keyboard);
           }
         }
       } else {
-        await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+        await ctx.reply(text, keyboard);
       }
     } catch (err) {
       this.logger.error('sendUsersPage xatosi:', err);
-      await ctx.reply('❌ Foydalanuvchilar ro\'yxatini yuklashda xato yuz berdi. Qaytadan urinib ko\'ring.');
+      await ctx.reply("❌ Foydalanuvchilar ro'yxatini yuklashda xato. Qaytadan urinib ko'ring.");
     }
   }
 
