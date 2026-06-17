@@ -857,6 +857,7 @@ export class BotService implements OnModuleInit {
       if (this.isAdmin(userId)) {
         const session = this.adminSessions.get(userId);
         if (session) return this.handleAdminSession(ctx, session, text);
+        // Admin uchun sessiya yo'q — boshqa hears handlerlarga o'tkazish uchun return qilmaymiz
         return;
       }
 
@@ -872,33 +873,49 @@ export class BotService implements OnModuleInit {
   // ============ HELPER METHODS ============
 
   private async sendUsersPage(ctx: Context, page: number, edit = false) {
-    const limit = 10;
-    const { users, total } = await this.usersService.getUsersPaginated(page, limit);
-    const totalPages = Math.ceil(total / limit);
+    try {
+      const limit = 10;
+      const { users, total } = await this.usersService.getUsersPaginated(page, limit);
+      const totalPages = Math.max(1, Math.ceil(total / limit));
 
-    let text = `👥 *Foydalanuvchilar ro'yxati* (${total} ta)\n`;
-    text += `📄 Sahifa: ${page}/${totalPages}\n\n`;
+      // Sahifa chegarasini tekshirish
+      if (page < 1) page = 1;
+      if (page > totalPages) page = totalPages;
 
-    users.forEach((u, i) => {
-      const num = (page - 1) * limit + i + 1;
-      const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || 'Nomsiz';
-      const username = u.username ? ` @${u.username}` : '';
-      const lang = u.language?.toUpperCase() || 'UZ';
-      const blocked = u.isBlocked ? ' 🚫' : '';
-      text += `${num}. *${name}*${username}\n`;
-      text += `   🌐 ${lang} | 💬 ${u.messageCount || 0} xabar${blocked}\n\n`;
-    });
+      let text = `👥 *Foydalanuvchilar ro'yxati* (${total} ta)\n`;
+      text += `📄 Sahifa: ${page}/${totalPages}\n\n`;
 
-    const keyboard = usersPageKeyboard(page, totalPages);
+      if (users.length === 0) {
+        text += `_Foydalanuvchilar topilmadi._`;
+      } else {
+        users.forEach((u, i) => {
+          const num = (page - 1) * limit + i + 1;
+          const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || 'Nomsiz';
+          const username = u.username ? ` @${u.username}` : '';
+          const lang = u.language?.toUpperCase() || 'UZ';
+          const blocked = u.isBlocked ? ' 🚫' : '';
+          text += `${num}. *${name}*${username}\n`;
+          text += `   🌐 ${lang} | 💬 ${u.messageCount || 0} xabar${blocked}\n\n`;
+        });
+      }
 
-    if (edit) {
-      try {
-        await (ctx as any).editMessageText(text, { parse_mode: 'Markdown', ...keyboard });
-      } catch {
+      const keyboard = usersPageKeyboard(page, totalPages);
+
+      if (edit) {
+        try {
+          await (ctx as any).editMessageText(text, { parse_mode: 'Markdown', ...keyboard });
+        } catch (editErr: any) {
+          // "message is not modified" xatosini e'tiborsiz qoldirish
+          if (!editErr?.description?.includes('message is not modified')) {
+            await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+          }
+        }
+      } else {
         await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
       }
-    } else {
-      await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+    } catch (err) {
+      this.logger.error('sendUsersPage xatosi:', err);
+      await ctx.reply('❌ Foydalanuvchilar ro\'yxatini yuklashda xato yuz berdi. Qaytadan urinib ko\'ring.');
     }
   }
 
