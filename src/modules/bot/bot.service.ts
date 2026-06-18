@@ -68,12 +68,10 @@ export class BotService implements OnModuleInit {
     return (user?.language as Lang) || 'uz';
   }
 
-  // Markdown uchun barcha maxsus belgilarni tozalash
   private escapeMd(text: string): string {
     return (text || '').replace(/[*_`[\]()~>#+=|{}.!\-\\]/g, '\\$&');
   }
 
-  // HTML parse_mode uchun escape (Markdowndan xavfsizroq)
   private escapeHtml(text: string): string {
     return (text || '')
       .replace(/&/g, '&amp;')
@@ -94,7 +92,6 @@ export class BotService implements OnModuleInit {
     }
   }
 
-  // Mahsulot matnini xavfsiz shakllantirish (HTML)
   private buildProductText(product: any, lang: Lang, viewCount: number): string {
     const name = lang === 'ru' && product.nameRu ? product.nameRu
       : lang === 'en' && product.nameEn ? product.nameEn : product.name;
@@ -429,20 +426,38 @@ export class BotService implements OnModuleInit {
       });
     });
 
+    // ============ ADMIN: KATEGORIYALAR (soni bilan) ============
     this.bot.hears('📋 Kategoriyalar', async (ctx) => {
       if (!(await this.isAdmin(ctx.from.id))) return;
       const categories = await this.categoriesService.getAllForAdmin();
       if (!categories.length) return ctx.reply("Kategoriyalar yo'q.");
 
+      // Har bir kategoriya uchun mahsulot sonini olish
+      const countEntries = await Promise.all(
+        categories.map(async (cat) => {
+          const count = await this.productsService.getCountByCategory(cat._id.toString());
+          return [cat._id.toString(), count] as [string, number];
+        }),
+      );
+      const counts = Object.fromEntries(countEntries);
+
       let text = "📋 <b>Kategoriyalar ro'yxati:</b>\n\n";
       categories.forEach((cat, i) => {
         const status = cat.isActive ? '✅' : '❌';
-        text += `${i + 1}. ${status} ${cat.emoji || ''} <b>${this.escapeHtml(cat.name)}</b>  (👁 ${cat.viewCount})\n`;
+        const cnt = counts[cat._id.toString()] || 0;
+        text += `${i + 1}. ${status} ${cat.emoji || ''} <b>${this.escapeHtml(cat.name)}</b>  📦${cnt}  👁${cat.viewCount}\n`;
       });
 
-      const buttons = categories.map((cat) => [
-        { text: `${cat.emoji || ''} ${cat.name}`, callback_data: `admin_cat_menu_${cat._id}` },
-      ]);
+      // Tugmalarda ham mahsulot soni ko'rinadi
+      const buttons = categories.map((cat) => {
+        const cnt = counts[cat._id.toString()] || 0;
+        return [
+          {
+            text: `${cat.emoji || ''} ${cat.name}  (${cnt})`,
+            callback_data: `admin_cat_menu_${cat._id}`,
+          },
+        ];
+      });
 
       await ctx.reply(text, {
         parse_mode: 'HTML',
@@ -455,32 +470,29 @@ export class BotService implements OnModuleInit {
       const catId = ctx.match[1];
       const cat = await this.categoriesService.findById(catId);
       if (!cat) return ctx.answerCbQuery('Topilmadi');
+      const prodCount = await this.productsService.getCountByCategory(catId);
       await ctx.answerCbQuery();
       await ctx.reply(
-        `${cat.emoji || ''} <b>${this.escapeHtml(cat.name)}</b>\nNima qilmoqchisiz?`,
+        `${cat.emoji || ''} <b>${this.escapeHtml(cat.name)}</b>\n📦 Mahsulotlar: ${prodCount} ta\nNima qilmoqchisiz?`,
         { parse_mode: 'HTML', ...adminCategoryActions(catId) },
       );
     });
 
+    // ============ ADMIN: MAHSULOTLAR (faqat tugmalar, text yo'q) ============
     this.bot.hears('📦 Mahsulotlar', async (ctx) => {
       if (!(await this.isAdmin(ctx.from.id))) return;
       const products = await this.productsService.getAllForAdmin();
       if (!products.length) return ctx.reply("Mahsulotlar yo'q.");
 
-      let text = "📦 <b>Mahsulotlar ro'yxati:</b>\n\n";
-      products.forEach((prod, i) => {
+      // Faqat tugmalar — har birida status, nom, narx, ko'rishlar
+      const buttons = products.map((prod) => {
         const status = prod.isActive ? '✅' : '❌';
-        text += `${i + 1}. ${status} <b>${this.escapeHtml(prod.name)}</b>`;
-        if (prod.price) text += ` — ${this.escapeHtml(prod.price)}`;
-        text += `  (👁 ${prod.viewCount})\n`;
+        const price = prod.price ? ` — ${prod.price}` : '';
+        const label = `${status} ${prod.name}${price}  👁${prod.viewCount}`;
+        return [{ text: label, callback_data: `admin_prod_menu_${prod._id}` }];
       });
 
-      const buttons = products.map((prod) => [
-        { text: prod.name, callback_data: `admin_prod_menu_${prod._id}` },
-      ]);
-
-      await ctx.reply(text, {
-        parse_mode: 'HTML',
+      await ctx.reply(`📦 Jami: ${products.length} ta mahsulot`, {
         reply_markup: { inline_keyboard: buttons },
       });
     });
@@ -602,6 +614,7 @@ export class BotService implements OnModuleInit {
 
     this.bot.action('noop', async (ctx) => ctx.answerCbQuery());
 
+    // ============ ADMIN: STATISTIKA (qisqa va aniq) ============
     this.bot.hears('📊 Statistika', async (ctx) => {
       if (!(await this.isAdmin(ctx.from.id))) return;
       const [userCount, activeUsers, catCount, prodCount, topProducts] = await Promise.all([
@@ -611,15 +624,21 @@ export class BotService implements OnModuleInit {
         this.productsService.getCount(),
         this.productsService.getTopViewed(),
       ]);
+
       let text = `📊 <b>Bot Statistikasi</b>\n\n`;
-      text += `👤 Jami foydalanuvchilar: <b>${userCount}</b>\n`;
-      text += `✅ Aktiv: <b>${activeUsers}</b>\n`;
+      text += `👤 Foydalanuvchilar: <b>${userCount}</b>  (✅ aktiv: <b>${activeUsers}</b>)\n`;
       text += `📂 Kategoriyalar: <b>${catCount}</b>\n`;
       text += `📦 Mahsulotlar: <b>${prodCount}</b>\n\n`;
-      text += `🔥 <b>Eng ko'p ko'rilgan:</b>\n`;
+      text += `🔥 <b>Top ko'rilgan:</b>\n`;
+
       topProducts.forEach((p, i) => {
-        text += `${i + 1}. ${this.escapeHtml(p.name)} — ${p.viewCount} ko'rishlar\n`;
+        // Nom 28 belgidan uzaysa qisqartiriladi
+        const shortName = p.name.length > 28
+          ? p.name.substring(0, 28) + '…'
+          : p.name;
+        text += `${i + 1}. ${this.escapeHtml(shortName)} — <b>${p.viewCount}</b> 👁\n`;
       });
+
       await ctx.reply(text, { parse_mode: 'HTML' });
     });
 
@@ -1209,7 +1228,6 @@ export class BotService implements OnModuleInit {
         return;
       }
 
-      // Matn fieldlarini sessionga yozib, darhol saqlash
       const updateData: any = {};
       if (session.step === 'name') { updateData.name = text; session.name = text; }
       else if (session.step === 'desc') { updateData.description = text; session.description = text; }
