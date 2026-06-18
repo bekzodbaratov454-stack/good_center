@@ -90,6 +90,16 @@ export function adminMainKeyboard() {
   ]).resize();
 }
 
+export function superAdminMainKeyboard() {
+  return Markup.keyboard([
+    ["➕ Kategoriya qo'sh", "📦 Mahsulot qo'sh"],
+    ['📋 Kategoriyalar', '📦 Mahsulotlar'],
+    ['📊 Statistika', '📢 Xabar yuborish'],
+    ['👥 Foydalanuvchilar', '👑 Adminlar'],
+    ['🏠 Bosh menyu'],
+  ]).resize();
+}
+
 export function adminCategoryActions(catId: string) {
   return Markup.inlineKeyboard([
     [

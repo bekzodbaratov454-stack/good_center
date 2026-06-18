@@ -76,4 +76,17 @@ export class UsersService {
   async getActiveUserCount(): Promise<number> {
     return this.userModel.countDocuments({ isBlocked: false });
   }
+
+  async setAdmin(telegramId: number, value: boolean): Promise<void> {
+    await this.userModel.updateOne({ telegramId }, { isAdmin: value });
+  }
+
+  async getAdmins(): Promise<UserDocument[]> {
+    return this.userModel.find({ isAdmin: true });
+  }
+
+  async isDbAdmin(telegramId: number): Promise<boolean> {
+    const user = await this.userModel.findOne({ telegramId });
+    return user?.isAdmin === true;
+  }
 }

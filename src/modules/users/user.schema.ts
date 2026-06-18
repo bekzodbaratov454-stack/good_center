@@ -26,6 +26,9 @@ export class User {
   @Prop({ default: false })
   isBlocked: boolean;
 
+  @Prop({ default: false })
+  isAdmin: boolean;
+
   @Prop({ default: 'idle' })
   state: string; // idle | waiting_question
 

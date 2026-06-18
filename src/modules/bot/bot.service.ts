@@ -9,7 +9,7 @@ import {
   mainMenuKeyboard, cancelKeyboard, categoriesInlineKeyboard,
   productsInlineKeyboard, productDetailKeyboard, languageKeyboard,
   adminMainKeyboard, adminCategoryActions, adminProductActions,
-  confirmDeleteKeyboard, usersPageKeyboard,
+  confirmDeleteKeyboard, usersPageKeyboard, superAdminMainKeyboard,
 } from './keyboards';
 
 @Injectable()
@@ -17,6 +17,7 @@ export class BotService implements OnModuleInit {
   private bot: Telegraf;
   private readonly logger = new Logger(BotService.name);
   private adminIds: number[];
+  private superAdminId: number;
   private adminSessions: Map<number, any> = new Map();
 
   constructor(
@@ -26,8 +27,9 @@ export class BotService implements OnModuleInit {
     private productsService: ProductsService,
   ) {
     this.bot = new Telegraf(this.config.get('BOT_TOKEN'));
-    this.adminIds = (this.config.get('ADMIN_IDS') || '')
-      .split(',').map((id: string) => parseInt(id.trim())).filter(Boolean);
+    const rawIds = (this.config.get('ADMIN_IDS') || '').split(',').map((id: string) => parseInt(id.trim())).filter(Boolean);
+    this.superAdminId = rawIds[0]; // birinchi ID - asosiy superAdmin
+    this.adminIds = rawIds;
   }
 
   async onModuleInit() {
@@ -46,7 +48,11 @@ export class BotService implements OnModuleInit {
   }
 
   getBot() { return this.bot; }
-  isAdmin(userId: number): boolean { return this.adminIds.includes(userId); }
+  isSuperAdmin(userId: number): boolean { return userId === this.superAdminId; }
+  async isAdmin(userId: number): Promise<boolean> {
+    if (this.adminIds.includes(userId)) return true;
+    return this.usersService.isDbAdmin(userId);
+  }
 
   private async getUserLang(ctx: Context): Promise<Lang> {
     const tgUser = ctx.from;
@@ -111,15 +117,16 @@ export class BotService implements OnModuleInit {
             await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
           }
 
-          if (!this.isAdmin(tgUser.id)) {
+          if (!(await this.isAdmin(tgUser.id))) {
             await ctx.reply(t(lang, 'backToMenu'), mainMenuKeyboard(lang));
           }
           return;
         }
       }
 
-      if (this.isAdmin(tgUser.id)) {
-        await ctx.reply('👑 Admin paneliga xush kelibsiz!', adminMainKeyboard());
+      if (await this.isAdmin(tgUser.id)) {
+        const welcomeKb = this.isSuperAdmin(tgUser.id) ? superAdminMainKeyboard() : adminMainKeyboard();
+        await ctx.reply('👑 Admin paneliga xush kelibsiz!', welcomeKb);
       } else {
         await ctx.reply(t(lang, 'welcome', user.firstName), mainMenuKeyboard(lang));
       }
@@ -134,8 +141,9 @@ export class BotService implements OnModuleInit {
       const lang = await this.getUserLang(ctx);
       await this.usersService.setState(ctx.from.id, 'idle');
       this.adminSessions.delete(ctx.from.id);
-      if (this.isAdmin(ctx.from.id)) {
-        await ctx.reply('Admin panel:', adminMainKeyboard());
+      if (await this.isAdmin(ctx.from.id)) {
+        const adminKb = this.isSuperAdmin(ctx.from.id) ? superAdminMainKeyboard() : adminMainKeyboard();
+        await ctx.reply('Admin panel:', adminKb);
       } else {
         await ctx.reply(t(lang, 'backToMenu'), mainMenuKeyboard(lang));
       }
@@ -144,7 +152,7 @@ export class BotService implements OnModuleInit {
     // ============ USER FLOWS ============
 
     this.bot.hears(['📂 Kategoriyalar', '📂 Категории', '📂 Categories'], async (ctx) => {
-      if (this.isAdmin(ctx.from.id)) return;
+      if (await this.isAdmin(ctx.from.id)) return;
       const lang = await this.getUserLang(ctx);
       const categories = await this.categoriesService.getAll();
       if (!categories.length) return ctx.reply(t(lang, 'noCategories'));
@@ -160,14 +168,14 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.hears(['🔍 Qidiruv', '🔍 Поиск', '🔍 Search'], async (ctx) => {
-      if (this.isAdmin(ctx.from.id)) return;
+      if (await this.isAdmin(ctx.from.id)) return;
       const lang = await this.getUserLang(ctx);
       await this.usersService.setState(ctx.from.id, 'searching');
       await ctx.reply(t(lang, 'searchPrompt'), cancelKeyboard(lang));
     });
 
     this.bot.hears(['⭐ Sevimlilar', '⭐ Избранное', '⭐ Favorites'], async (ctx) => {
-      if (this.isAdmin(ctx.from.id)) return;
+      if (await this.isAdmin(ctx.from.id)) return;
       const lang = await this.getUserLang(ctx);
       const user = await this.usersService.findByTelegramId(ctx.from.id);
       if (!user || !user.favorites.length) return ctx.reply(t(lang, 'noFavorites'), mainMenuKeyboard(lang));
@@ -181,7 +189,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.hears(['📩 Adminga savol', '📩 Вопрос администратору', '📩 Ask Admin'], async (ctx) => {
-      if (this.isAdmin(ctx.from.id)) return;
+      if (await this.isAdmin(ctx.from.id)) return;
       const lang = await this.getUserLang(ctx);
       await this.usersService.setState(ctx.from.id, 'waiting_question');
       await ctx.reply(t(lang, 'askAdminPrompt'), cancelKeyboard(lang));
@@ -190,18 +198,18 @@ export class BotService implements OnModuleInit {
     this.bot.hears(
       ['📞 Aloqa & 📍 Manzil', '📞 Контакт & 📍 Адрес', '📞 Contact & 📍 Location'],
       async (ctx) => {
-        if (this.isAdmin(ctx.from.id)) return;
+        if (await this.isAdmin(ctx.from.id)) return;
         await this.sendContactInfo(ctx);
       },
     );
 
     this.bot.hears(['📞 Telefon', '📞 Телефон', '📞 Phone'], async (ctx) => {
-      if (this.isAdmin(ctx.from.id)) return;
+      if (await this.isAdmin(ctx.from.id)) return;
       await this.sendContactInfo(ctx);
     });
 
     this.bot.hears(['📍 Manzil', '📍 Адрес', '📍 Location'], async (ctx) => {
-      if (this.isAdmin(ctx.from.id)) return;
+      if (await this.isAdmin(ctx.from.id)) return;
       const lang = await this.getUserLang(ctx);
       const contactAddress = this.config.get('CONTACT_ADDRESS') || '';
       const contactLat = parseFloat(this.config.get('CONTACT_LAT') || '0');
@@ -362,7 +370,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^reply_(\d+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const targetUserId = parseInt(ctx.match[1]);
       await ctx.answerCbQuery();
       this.adminSessions.set(ctx.from.id, {
@@ -379,7 +387,7 @@ export class BotService implements OnModuleInit {
     // ============ ADMIN FLOWS ============
 
     this.bot.hears("➕ Kategoriya qo'sh", async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       this.adminSessions.set(ctx.from.id, { action: 'add_category', step: 'name' });
       await ctx.reply(
         "📝 Kategoriya nomini kiriting:\n\nNamuna: 🏠 Uy jihozlari\n(Emoji qo'shsangiz avtomatik ajratiladi)",
@@ -388,7 +396,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.hears("📦 Mahsulot qo'sh", async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const categories = await this.categoriesService.getAllForAdmin();
       if (!categories.length) return ctx.reply("Avval kategoriya qo'shing!");
       this.adminSessions.set(ctx.from.id, { action: 'add_product', step: 'category' });
@@ -401,7 +409,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.hears('📋 Kategoriyalar', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const categories = await this.categoriesService.getAllForAdmin();
       if (!categories.length) return ctx.reply("Kategoriyalar yo'q.");
 
@@ -422,7 +430,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^admin_cat_menu_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const catId = ctx.match[1];
       const cat = await this.categoriesService.findById(catId);
       if (!cat) return ctx.answerCbQuery('Topilmadi');
@@ -434,7 +442,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.hears('📦 Mahsulotlar', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const products = await this.productsService.getAllForAdmin();
       if (!products.length) return ctx.reply("Mahsulotlar yo'q.");
 
@@ -457,7 +465,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^admin_prod_menu_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const prodId = ctx.match[1];
       const prod = await this.productsService.findById(prodId);
       if (!prod) return ctx.answerCbQuery('Topilmadi');
@@ -469,7 +477,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^admin_edit_prod_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const prodId = ctx.match[1];
       const prod = await this.productsService.findById(prodId);
       if (!prod) return ctx.answerCbQuery('Topilmadi');
@@ -501,7 +509,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^admin_edit_cat_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const catId = ctx.match[1];
       const cat = await this.categoriesService.findById(catId);
       if (!cat) return ctx.answerCbQuery('Topilmadi');
@@ -520,7 +528,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^admin_edit_field_(name|desc|price|phone|locname|photos)_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const field = ctx.match[1];
       const prodId = ctx.match[2];
       await ctx.answerCbQuery();
@@ -552,7 +560,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action('admin_edit_photos_done', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session || session.action !== 'edit_product') return;
       await ctx.answerCbQuery();
@@ -560,12 +568,12 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.hears("👥 Foydalanuvchilar", async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       await this.sendUsersPage(ctx, 1);
     });
 
     this.bot.action(/^users_page_(\d+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const page = parseInt(ctx.match[1]);
       await ctx.answerCbQuery();
       await this.sendUsersPage(ctx, page, true);
@@ -574,7 +582,7 @@ export class BotService implements OnModuleInit {
     this.bot.action('noop', async (ctx) => ctx.answerCbQuery());
 
     this.bot.hears('📊 Statistika', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const [userCount, activeUsers, catCount, prodCount, topProducts] = await Promise.all([
         this.usersService.getUserCount(),
         this.usersService.getActiveUserCount(),
@@ -594,8 +602,83 @@ export class BotService implements OnModuleInit {
       await ctx.reply(text, { parse_mode: 'Markdown' });
     });
 
+    // ===================== ADMINLAR BOSHQARUVI (faqat superAdmin) =====================
+
+    this.bot.hears('👑 Adminlar', async (ctx) => {
+      if (!this.isSuperAdmin(ctx.from.id)) return;
+      const admins = await this.usersService.getAdmins();
+      const dbAdmins = admins.filter(a => !this.adminIds.includes(a.telegramId));
+      let text = `👑 *Adminlar ro'yxati*\n\n🔒 *Asosiy admin (ENV):*\n• ID: \`${this.superAdminId}\` — siz\n`;
+      if (dbAdmins.length === 0) {
+        text += '\n📋 *Qo\'shimcha adminlar:* hali yo\'q';
+      } else {
+        text += '\n📋 *Qo\'shimcha adminlar:*\n';
+        for (const a of dbAdmins) {
+          const name = [a.firstName, a.lastName].filter(Boolean).join(' ') || 'Nomsiz';
+          const username = a.username ? ` (@${a.username})` : '';
+          text += `• ${name}${username} — ID: \`${a.telegramId}\`\n`;
+        }
+      }
+      const buttons: any[] = [];
+      for (const a of dbAdmins) {
+        const name = [a.firstName, a.lastName].filter(Boolean).join(' ') || 'Nomsiz';
+        buttons.push([{ text: `❌ ${name} ni o'chirish`, callback_data: `remove_admin_${a.telegramId}` }]);
+      }
+      buttons.push([{ text: "➕ Yangi admin qo'shish", callback_data: 'add_admin_start' }]);
+      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+    });
+
+    this.bot.action('add_admin_start', async (ctx) => {
+      if (!this.isSuperAdmin(ctx.from.id)) return;
+      await ctx.answerCbQuery();
+      this.adminSessions.set(ctx.from.id, { action: 'add_admin', step: 'id' });
+      await ctx.reply(
+        "➕ *Yangi admin qo'shish*\n\nAdmin qilmoqchi bo'lgan foydalanuvchining Telegram ID sini kiriting:\n_(Foydalanuvchi avval botga /start bosgan bo'lishi kerak)_",
+        { parse_mode: 'Markdown', ...cancelKeyboard('uz') },
+      );
+    });
+
+    this.bot.action(/^remove_admin_(\d+)$/, async (ctx) => {
+      if (!this.isSuperAdmin(ctx.from.id)) return;
+      const targetId = parseInt(ctx.match[1]);
+      await ctx.answerCbQuery();
+      const user = await this.usersService.findByTelegramId(targetId);
+      if (!user) {
+        await ctx.reply("❌ Foydalanuvchi topilmadi.");
+        return;
+      }
+      const name = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'Nomsiz';
+      await ctx.reply(
+        `⚠️ *${name}* (ID: \`${targetId}\`) ni admin huquqidan mahrum qilmoqchimisiz?`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "✅ Ha, o'chir", callback_data: `confirm_remove_admin_${targetId}` },
+                { text: "❌ Bekor", callback_data: 'cancel_action' },
+              ],
+            ],
+          },
+        },
+      );
+    });
+
+    this.bot.action(/^confirm_remove_admin_(\d+)$/, async (ctx) => {
+      if (!this.isSuperAdmin(ctx.from.id)) return;
+      const targetId = parseInt(ctx.match[1]);
+      await ctx.answerCbQuery();
+      await this.usersService.setAdmin(targetId, false);
+      try {
+        await this.bot.telegram.sendMessage(targetId, "⚠️ Sizning admin huquqingiz bekor qilindi.");
+      } catch {}
+      await ctx.editMessageText("✅ Admin huquqi bekor qilindi.");
+    });
+
+    // ===================== END ADMINLAR BOSHQARUVI =====================
+
     this.bot.hears('📢 Xabar yuborish', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       this.adminSessions.set(ctx.from.id, { action: 'broadcast', step: 'message' });
       await ctx.reply(
         "📢 Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yozing:",
@@ -604,7 +687,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^admin_choose_cat_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const catId = ctx.match[1];
       const session = this.adminSessions.get(ctx.from.id) || { action: 'add_product' };
       session.categoryId = catId;
@@ -615,7 +698,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^admin_add_prod_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const catId = ctx.match[1];
       this.adminSessions.set(ctx.from.id, {
         action: 'add_product',
@@ -627,21 +710,21 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action(/^admin_del_cat_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const catId = ctx.match[1];
       await ctx.answerCbQuery();
       await ctx.reply("⚠️ Kategoriyani o'chirishni tasdiqlaysizmi?", confirmDeleteKeyboard('cat', catId));
     });
 
     this.bot.action(/^admin_del_prod_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const prodId = ctx.match[1];
       await ctx.answerCbQuery();
       await ctx.reply("⚠️ Mahsulotni o'chirishni tasdiqlaysizmi?", confirmDeleteKeyboard('prod', prodId));
     });
 
     this.bot.action(/^confirm_del_(cat|prod)_(.+)$/, async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const type = ctx.match[1];
       const id = ctx.match[2];
       if (type === 'cat') {
@@ -661,7 +744,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action('admin_photos_done', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       await ctx.answerCbQuery('✅ Rasmlar saqlandi!');
@@ -671,7 +754,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action('admin_photos_clear', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.photos = [];
@@ -685,7 +768,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action('admin_skip_price', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.price = null;
@@ -706,7 +789,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action('admin_skip_name_ru', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.step = 'name_en';
@@ -719,7 +802,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action('admin_skip_name_en', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.step = 'description';
@@ -729,7 +812,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action('admin_skip_desc_ru', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.step = 'description_en';
@@ -742,7 +825,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action('admin_skip_desc_en', async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.step = 'phone';
@@ -755,7 +838,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action("admin_skip_phone_to_loc", async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.phone = null;
@@ -766,7 +849,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action("admin_skip_location_all", async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.locationName = null;
@@ -780,7 +863,7 @@ export class BotService implements OnModuleInit {
     });
 
     this.bot.action("admin_skip_coords", async (ctx) => {
-      if (!this.isAdmin(ctx.from.id)) return;
+      if (!(await this.isAdmin(ctx.from.id))) return;
       const session = this.adminSessions.get(ctx.from.id);
       if (!session) return;
       session.location = null;
@@ -794,7 +877,7 @@ export class BotService implements OnModuleInit {
 
     this.bot.on('location', async (ctx) => {
       const userId = ctx.from.id;
-      if (!this.isAdmin(userId)) return;
+      if (!(await this.isAdmin(userId))) return;
       const session = this.adminSessions.get(userId);
       if (!session) return;
 
@@ -813,7 +896,7 @@ export class BotService implements OnModuleInit {
 
     this.bot.on('photo', async (ctx) => {
       const userId = ctx.from.id;
-      if (!this.isAdmin(userId)) return;
+      if (!(await this.isAdmin(userId))) return;
       const session = this.adminSessions.get(userId);
       if (!session) return;
 
@@ -850,11 +933,14 @@ export class BotService implements OnModuleInit {
         await this.usersService.setState(userId, 'idle');
         this.adminSessions.delete(userId);
         const lang = await this.getUserLang(ctx);
-        if (this.isAdmin(userId)) return ctx.reply('❌ Bekor qilindi', adminMainKeyboard());
+        if (await this.isAdmin(userId)) {
+          const kb = this.isSuperAdmin(userId) ? superAdminMainKeyboard() : adminMainKeyboard();
+          return ctx.reply('❌ Bekor qilindi', kb);
+        }
         return ctx.reply('❌ Bekor qilindi', mainMenuKeyboard(lang));
       }
 
-      if (this.isAdmin(userId)) {
+      if (await this.isAdmin(userId)) {
         const session = this.adminSessions.get(userId);
         if (session) return this.handleAdminSession(ctx, session, text);
         // Admin uchun sessiya yo'q — boshqa hears handlerlarga o'tkazish uchun return qilmaymiz
@@ -1130,7 +1216,32 @@ export class BotService implements OnModuleInit {
           await new Promise((r) => setTimeout(r, 35));
         } catch { failed++; }
       }
-      await ctx.reply(`✅ Tayyor!\n✔️ Yuborildi: ${sent}\n❌ Xato: ${failed}`, adminMainKeyboard());
+      const kb = this.isSuperAdmin(userId) ? superAdminMainKeyboard() : adminMainKeyboard();
+      await ctx.reply(`✅ Tayyor!\n✔️ Yuborildi: ${sent}\n❌ Xato: ${failed}`, kb);
+    }
+
+    if (session.action === 'add_admin' && session.step === 'id') {
+      this.adminSessions.delete(userId);
+      const targetId = parseInt(text.trim());
+      if (isNaN(targetId)) {
+        await ctx.reply("❌ Noto'g'ri ID. Faqat raqam kiriting.", superAdminMainKeyboard());
+        return;
+      }
+      if (targetId === this.superAdminId) {
+        await ctx.reply("⚠️ Bu asosiy admin — o'zgartirib bo'lmaydi.", superAdminMainKeyboard());
+        return;
+      }
+      const targetUser = await this.usersService.findByTelegramId(targetId);
+      if (!targetUser) {
+        await ctx.reply(`❌ ID \`${targetId}\` bo'lgan foydalanuvchi topilmadi.\n\nFoydalanuvchi botga /start bosgan bo'lishi kerak.`, { parse_mode: 'Markdown', ...superAdminMainKeyboard() });
+        return;
+      }
+      await this.usersService.setAdmin(targetId, true);
+      const name = [targetUser.firstName, targetUser.lastName].filter(Boolean).join(' ') || 'Nomsiz';
+      await ctx.reply(`✅ *${name}* (ID: \`${targetId}\`) admin qilindi!`, { parse_mode: 'Markdown', ...superAdminMainKeyboard() });
+      try {
+        await this.bot.telegram.sendMessage(targetId, "🎉 Siz admin huquqiga ega bo'ldingiz! /start bosing.");
+      } catch {}
     }
   }
 
